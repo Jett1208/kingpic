@@ -189,18 +189,31 @@ export class GameEngine {
     const kingPos = { x: this.squad.kingX, y: this.squad.kingY };
     for (const d of this.destructibles) {
       if (d.alive) {
-        d.update(dt, kingPos, (fromX, fromY) => {
-          this.squad.applyKnockback(fromX, fromY);
-        }, this.arrows);
+        d.update(
+          dt,
+          kingPos,
+          (fromX, fromY) => {
+            this.squad.applyKnockback(fromX, fromY);
+          },
+          this.arrows,
+          this.squad.soldiers,
+          this.particles
+        );
       }
     }
 
     // 4. Update Arrows
     for (let i = this.arrows.length - 1; i >= 0; i--) {
       const a = this.arrows[i];
-      a.update(dt, kingPos, (fromX, fromY) => {
-        this.squad.applyKnockback(fromX, fromY);
-      }, this.particles);
+      a.update(
+        dt,
+        kingPos,
+        (fromX, fromY) => {
+          this.squad.applyKnockback(fromX, fromY);
+        },
+        this.particles,
+        this.squad.soldiers
+      );
       if (!a.alive) {
         this.arrows.splice(i, 1);
       }
@@ -225,9 +238,10 @@ export class GameEngine {
   private handleDestructibleKill(d: Destructible): void {
     this.destroyedCount++;
 
-    // Release soldiers if cage
+    // Release soldiers if cage & heal entire squad to 100%
     if (d instanceof SoldierCage) {
       this.squad.addSoldiers(d.soldiersToFree);
+      this.squad.healAllSoldiers(this.particles);
     }
 
     // Spawn flying coins to King's coin tower

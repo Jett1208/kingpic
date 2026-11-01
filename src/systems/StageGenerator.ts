@@ -93,6 +93,10 @@ export class StageGenerator {
     destructibles.push(new CoinPile(120, 710, 20));
     destructibles.push(new CoinPile(280, 710, 20));
 
+    // 2 Scout Monsters in spawn zone
+    destructibles.push(new RedMonster(100, 730, stageNumber));
+    destructibles.push(new RedMonster(300, 730, stageNumber));
+
     // ==========================================
     // 2. MID ZONE (Y: 260 - 640) - High Density
     // ==========================================
@@ -103,10 +107,10 @@ export class StageGenerator {
       destructibles.push(new SoldierCage(pos.x, pos.y, stageNumber));
     }
 
-    // Red Monsters (3 to 6)
-    const monsterCount = 3 + Math.min(3, Math.floor(stageNumber / 2));
-    for (let i = 0; i < monsterCount; i++) {
-      const pos = getRandomPosInZone(300, 600, 50, 350, 45);
+    // Red Monsters Swarm (14 to 18 in mid-zone)
+    const midMonsterCount = 14 + Math.min(4, Math.floor(stageNumber / 2));
+    for (let i = 0; i < midMonsterCount; i++) {
+      const pos = getRandomPosInZone(280, 620, 50, 350, 36);
       destructibles.push(new RedMonster(pos.x, pos.y, stageNumber));
     }
 
@@ -154,6 +158,12 @@ export class StageGenerator {
     for (const fx of bossFenceX) {
       destructibles.push(new Fence(fx, 200));
     }
+
+    // Elite Boss Guard Monsters
+    destructibles.push(new RedMonster(140, 150, stageNumber));
+    destructibles.push(new RedMonster(260, 150, stageNumber));
+    destructibles.push(new RedMonster(170, 170, stageNumber));
+    destructibles.push(new RedMonster(230, 170, stageNumber));
 
     // Boss victory treasure coin piles
     destructibles.push(new CoinPile(200, 50, 35));

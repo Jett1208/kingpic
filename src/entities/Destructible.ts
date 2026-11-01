@@ -10,6 +10,13 @@ import { ParticleSystem } from './ParticleSystem';
 
 export type DestructibleType = 'fence' | 'coinPile' | 'cage' | 'redMonster' | 'archerTower' | 'bossTower';
 
+export interface CombatSoldier {
+  x: number;
+  y: number;
+  alive: boolean;
+  takeDamage(amount: number, particles: ParticleSystem): boolean;
+}
+
 export abstract class Destructible {
   public x: number;
   public y: number;
@@ -54,7 +61,9 @@ export abstract class Destructible {
     _dt: number,
     _kingPos: { x: number; y: number },
     _onHitKing: (fromX: number, fromY: number) => void,
-    _arrows: Arrow[]
+    _arrows: Arrow[],
+    _soldiers?: CombatSoldier[],
+    _particles?: ParticleSystem
   ): void {
     // Default static update
   }
@@ -163,45 +172,65 @@ export class RedMonster extends Destructible {
   public override update(
     dt: number,
     kingPos: { x: number; y: number },
-    onHitKing: (fromX: number, fromY: number) => void
+    onHitKing: (fromX: number, fromY: number) => void,
+    _arrows: Arrow[],
+    soldiers?: CombatSoldier[],
+    particles?: ParticleSystem
   ): void {
     if (!this.alive) return;
 
-    const dx = kingPos.x - this.x;
-    const dy = kingPos.y - this.y;
-    const dist = Math.hypot(dx, dy);
+    // Find nearest target among King and nearby alive Soldiers
+    let target = { x: kingPos.x, y: kingPos.y, isKing: true, soldier: null as CombatSoldier | null };
+    let minDist = Math.hypot(kingPos.x - this.x, kingPos.y - this.y);
+
+    if (soldiers) {
+      for (const s of soldiers) {
+        if (!s.alive) continue;
+        const d = Math.hypot(s.x - this.x, s.y - this.y);
+        if (d < minDist) {
+          minDist = d;
+          target = { x: s.x, y: s.y, isKing: false, soldier: s };
+        }
+      }
+    }
 
     if (this.state === 'IDLE') {
-      if (dist < 120) {
+      if (minDist < 130) {
         this.state = 'CHASE';
       }
     } else if (this.state === 'CHASE') {
-      if (dist < 26) {
+      if (minDist < 26) {
         // Attack hit!
         this.state = 'ATTACK';
         soundEngine.playKnockback();
         soundEngine.vibrateLight();
-        onHitKing(this.x, this.y);
-        this.retreatTimer = 1.0;
+        if (target.isKing) {
+          onHitKing(this.x, this.y);
+        } else if (target.soldier && particles) {
+          target.soldier.takeDamage(10, particles);
+        }
+        this.retreatTimer = 0.8;
         this.state = 'RETREAT';
       } else {
-        // Move towards king
-        const vx = (dx / dist) * this.speed;
-        const vy = (dy / dist) * this.speed;
+        // Move towards target
+        const dx = target.x - this.x;
+        const dy = target.y - this.y;
+        const vx = (dx / minDist) * this.speed;
+        const vy = (dy / minDist) * this.speed;
         this.x += vx * dt;
         this.y += vy * dt;
       }
     } else if (this.state === 'RETREAT') {
       this.retreatTimer -= dt;
-      if (dist > 0) {
+      const dx = target.x - this.x;
+      const dy = target.y - this.y;
+      if (minDist > 0) {
         // Back off slowly
-        const vx = (-dx / dist) * 40;
-        const vy = (-dy / dist) * 40;
-        this.x += vx * dt;
-        this.y += vy * dt;
+        this.x -= (dx / minDist) * 35 * dt;
+        this.y -= (dy / minDist) * 35 * dt;
       }
       if (this.retreatTimer <= 0) {
-        this.state = dist < 140 ? 'CHASE' : 'IDLE';
+        this.state = minDist < 150 ? 'CHASE' : 'IDLE';
       }
     }
   }
@@ -309,7 +338,8 @@ export class Arrow {
     dt: number,
     kingPos: { x: number; y: number },
     onHitKing: (fromX: number, fromY: number) => void,
-    particles: ParticleSystem
+    particles: ParticleSystem,
+    soldiers?: CombatSoldier[]
   ): void {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
@@ -328,6 +358,23 @@ export class Arrow {
       soundEngine.vibrateLight();
       particles.spawnSpark(this.x, this.y, 4);
       onHitKing(this.x - this.vx * 0.1, this.y - this.vy * 0.1);
+      return;
+    }
+
+    // Check hit on Soldiers (radius ~14px)
+    if (soldiers) {
+      for (const s of soldiers) {
+        if (!s.alive) continue;
+        const distToSoldier = Math.hypot(this.x - s.x, this.y - s.y);
+        if (distToSoldier < 14) {
+          this.alive = false;
+          soundEngine.playKnockback();
+          soundEngine.vibrateLight();
+          particles.spawnSpark(this.x, this.y, 4);
+          s.takeDamage(10, particles);
+          return;
+        }
+      }
     }
   }
 

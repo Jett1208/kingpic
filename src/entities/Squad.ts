@@ -1,7 +1,8 @@
 /**
  * Squad.ts
- * Manages the King (invincible, carrying sine-wave coin tower),
- * and the surrounding Squad of rescued Soldiers (orbiting & auto-attacking).
+ * Manages the King (invincible leader with Royal Slash) and the surrounding
+ * Squad of Soldiers with HP 20, charging enemies within the Detection Aura,
+ * and following in a dynamic Loose Escort Mob formation.
  */
 
 import { spriteCache } from '../core/SpriteCache';
@@ -12,85 +13,165 @@ import { ParticleSystem } from './ParticleSystem';
 export class SoldierUnit {
   public x: number;
   public y: number;
-  public targetAngle: number;
+  public hp = 50;
+  public maxHp = 50;
+  public alive = true;
+  public targetEnemy: Destructible | null = null;
+  public formationOffset: { x: number; y: number };
+
   private attackCooldown = 0;
   private readonly attackInterval = 0.5; // 20 DPS per soldier
   private slashTimer = 0;
   private slashTarget: { x: number; y: number } | null = null;
 
-  constructor(x: number, y: number, targetAngle: number) {
+  constructor(x: number, y: number, offsetX: number, offsetY: number) {
     this.x = x;
     this.y = y;
-    this.targetAngle = targetAngle;
+    this.formationOffset = { x: offsetX, y: offsetY };
+  }
+
+  public takeDamage(amount: number, particles: ParticleSystem): boolean {
+    if (!this.alive) return false;
+    this.hp -= amount;
+    particles.spawnDamageNumber(this.x, this.y, amount);
+    particles.spawnSpark(this.x, this.y, 4);
+
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.alive = false;
+      particles.spawnWoodDebris(this.x, this.y, 5);
+      soundEngine.playKnockback();
+      return true;
+    }
+    return false;
+  }
+
+  public healFull(particles?: ParticleSystem): void {
+    if (!this.alive) return;
+    this.hp = this.maxHp;
+    if (particles) {
+      particles.spawnSpark(this.x, this.y, 5);
+    }
   }
 
   public update(
     dt: number,
     kingX: number,
     kingY: number,
-    orbitRadius: number,
+    detectionRadius: number,
     destructibles: Destructible[],
     particles: ParticleSystem,
     onKill: (d: Destructible) => void
   ): void {
-    // 1. Orbit movement: lerp towards target position
-    const targetX = kingX + Math.cos(this.targetAngle) * orbitRadius;
-    const targetY = kingY + Math.sin(this.targetAngle) * orbitRadius;
+    if (!this.alive) return;
 
-    const lerpSpeed = 10;
-    this.x += (targetX - this.x) * Math.min(1.0, lerpSpeed * dt);
-    this.y += (targetY - this.y) * Math.min(1.0, lerpSpeed * dt);
-
-    // 2. Attack logic
     this.attackCooldown -= dt;
     if (this.slashTimer > 0) {
       this.slashTimer -= dt;
     }
 
-    if (this.attackCooldown <= 0) {
-      // Find nearest alive destructible
-      let nearest: Destructible | null = null;
-      let minDist = orbitRadius + 30; // within soldier reach
+    // 1. Verify or find targetEnemy within detection radius
+    if (
+      this.targetEnemy &&
+      (!this.targetEnemy.alive ||
+        Math.hypot(this.targetEnemy.x - kingX, this.targetEnemy.y - kingY) > detectionRadius * 1.35)
+    ) {
+      // Enemy dead or outside leash distance: disengage
+      this.targetEnemy = null;
+    }
 
+    if (!this.targetEnemy) {
+      let nearest: Destructible | null = null;
+      let minDist = detectionRadius;
       for (const d of destructibles) {
         if (!d.alive) continue;
-        const dist = Math.hypot(d.x - this.x, d.y - this.y);
-        if (dist < minDist) {
-          minDist = dist;
-          nearest = d;
+        const distFromKing = Math.hypot(d.x - kingX, d.y - kingY);
+        if (distFromKing <= detectionRadius) {
+          const distFromSoldier = Math.hypot(d.x - this.x, d.y - this.y);
+          if (distFromSoldier < minDist) {
+            minDist = distFromSoldier;
+            nearest = d;
+          }
         }
       }
+      this.targetEnemy = nearest;
+    }
 
-      if (nearest) {
-        this.attackCooldown = this.attackInterval;
-        this.slashTimer = 0.15;
-        this.slashTarget = { x: nearest.x, y: nearest.y };
+    // 2. Movement & Combat Action
+    if (this.targetEnemy && this.targetEnemy.alive) {
+      // Charge toward target enemy!
+      const dx = this.targetEnemy.x - this.x;
+      const dy = this.targetEnemy.y - this.y;
+      const dist = Math.hypot(dx, dy);
 
-        const died = nearest.takeDamage(10, particles);
-        soundEngine.playAttack();
-        soundEngine.vibrateLight();
+      if (dist > 24) {
+        // Sprint to target at 145 px/s
+        const speed = 145;
+        this.x += (dx / dist) * speed * dt;
+        this.y += (dy / dist) * speed * dt;
+      } else {
+        // In melee combat range!
+        if (this.attackCooldown <= 0) {
+          this.attackCooldown = this.attackInterval;
+          this.slashTimer = 0.15;
+          this.slashTarget = { x: this.targetEnemy.x, y: this.targetEnemy.y };
 
-        if (died) {
-          onKill(nearest);
+          const died = this.targetEnemy.takeDamage(10, particles);
+          soundEngine.playAttack();
+          soundEngine.vibrateLight();
+
+          if (died) {
+            onKill(this.targetEnemy);
+            this.targetEnemy = null;
+          }
         }
+      }
+    } else {
+      // 3. Loose Escort Mob: follow King naturally
+      const desiredX = kingX + this.formationOffset.x;
+      const desiredY = kingY + this.formationOffset.y;
+      const dx = desiredX - this.x;
+      const dy = desiredY - this.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > 6) {
+        const followSpeed = dist > 70 ? 165 : 120;
+        this.x += (dx / dist) * followSpeed * dt;
+        this.y += (dy / dist) * followSpeed * dt;
       }
     }
   }
 
   public draw(ctx: CanvasRenderingContext2D, cameraY: number): void {
+    if (!this.alive) return;
     const renderY = this.y - cameraY;
 
     // Draw soldier sprite centered
     ctx.drawImage(spriteCache.soldier, this.x - 16, renderY - 16, 32, 32);
 
-    // Draw sword slash swipe arc if attacking
+    // Mini HP bar if damaged
+    if (this.hp < this.maxHp) {
+      const barW = 18;
+      const barH = 3;
+      const barX = this.x - barW / 2;
+      const barY = renderY - 18;
+
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+
+      const percent = Math.max(0, this.hp / this.maxHp);
+      ctx.fillStyle = percent > 0.4 ? '#22c55e' : '#ef4444';
+      ctx.fillRect(barX, barY, barW * percent, barH);
+    }
+
+    // Sword slash swipe arc
     if (this.slashTimer > 0 && this.slashTarget) {
       const targetRenderY = this.slashTarget.y - cameraY;
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(this.x, renderY);
       ctx.lineTo(this.slashTarget.x, targetRenderY);
-      ctx.strokeStyle = '#fef08a'; // bright slash line
+      ctx.strokeStyle = '#fef08a';
       ctx.lineWidth = 3;
       ctx.stroke();
       ctx.restore();
@@ -130,34 +211,18 @@ export class Squad {
   }
 
   public get auraRadius(): number {
-    return 75 + Math.min(85, this.soldiers.length * 2.5);
+    return 80 + Math.min(90, this.soldiers.length * 3.5);
   }
 
   public addSoldiers(count: number): void {
-    const currentCount = this.soldiers.length;
-    const newTotal = currentCount + count;
-
     for (let i = 0; i < count; i++) {
-      // Spawn near king
-      const angle = (Math.PI * 2 * (currentCount + i)) / newTotal;
-      const initialDist = 30;
-      const s = new SoldierUnit(
-        this.kingX + Math.cos(angle) * initialDist,
-        this.kingY + Math.sin(angle) * initialDist,
-        angle
-      );
+      // Loose cluster offset around King
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 22 + Math.random() * 34;
+      const offsetX = Math.cos(angle) * dist;
+      const offsetY = Math.sin(angle) * dist + 12; // slightly trailing King
+      const s = new SoldierUnit(this.kingX + offsetX, this.kingY + offsetY, offsetX, offsetY);
       this.soldiers.push(s);
-    }
-
-    // Re-distribute orbit angles evenly
-    this.rebalanceAngles();
-  }
-
-  private rebalanceAngles(): void {
-    const total = this.soldiers.length;
-    if (total === 0) return;
-    for (let i = 0; i < total; i++) {
-      this.soldiers[i].targetAngle = (Math.PI * 2 * i) / total;
     }
   }
 
@@ -165,16 +230,22 @@ export class Squad {
     this.stackedCoins += count;
   }
 
+  public healAllSoldiers(particles: ParticleSystem): void {
+    for (const soldier of this.soldiers) {
+      soldier.healFull(particles);
+    }
+    soundEngine.playCoin();
+  }
+
   public applyKnockback(fromX: number, fromY: number): void {
     const dx = this.kingX - fromX;
     const dy = this.kingY - fromY;
     const dist = Math.hypot(dx, dy) || 1;
 
-    // Push away with impulse
     const impulse = 180;
     this.knockbackVx = (dx / dist) * impulse;
     this.knockbackVy = (dy / dist) * impulse;
-    this.slowTimer = 0.2; // 0.2s slow
+    this.slowTimer = 0.2;
   }
 
   public update(
@@ -190,14 +261,12 @@ export class Squad {
     let currentSpeed = this.baseSpeed;
     if (this.slowTimer > 0) {
       this.slowTimer -= dt;
-      currentSpeed *= 0.45; // Slowed down during knockback
+      currentSpeed *= 0.45;
     }
 
-    // Apply input velocity
     this.velocityX = inputDir.dx * currentSpeed;
     this.velocityY = inputDir.dy * currentSpeed;
 
-    // Apply knockback decay
     if (Math.hypot(this.knockbackVx, this.knockbackVy) > 5) {
       this.velocityX += this.knockbackVx;
       this.velocityY += this.knockbackVy;
@@ -211,18 +280,11 @@ export class Squad {
     this.kingX += this.velocityX * dt;
     this.kingY += this.velocityY * dt;
 
-    // Clamp within map boundaries
     const margin = 20;
     this.kingX = Math.max(margin, Math.min(this.worldWidth - margin, this.kingX));
     this.kingY = Math.max(margin, Math.min(this.worldHeight - margin, this.kingY));
 
-    // Rotate soldier orbit slowly around king
-    const orbitSpeed = 0.6; // rad/s
-    for (const soldier of this.soldiers) {
-      soldier.targetAngle += orbitSpeed * dt;
-    }
-
-    // 2. King's Royal Melee Attack (Swings sword within 45px)
+    // 2. King's Royal Melee Attack
     this.kingAttackCooldown -= dt;
     if (this.kingSlashTimer > 0) {
       this.kingSlashTimer -= dt;
@@ -256,25 +318,33 @@ export class Squad {
       }
     }
 
-    // 3. Update Soldiers
-    const orbitRadius = Math.max(35, this.auraRadius * 0.7);
+    // 3. Update Soldiers & Filter out fallen soldiers
     for (const soldier of this.soldiers) {
-      soldier.update(dt, this.kingX, this.kingY, orbitRadius, destructibles, particles, onKill);
+      soldier.update(
+        dt,
+        this.kingX,
+        this.kingY,
+        this.auraRadius,
+        destructibles,
+        particles,
+        onKill
+      );
     }
+    this.soldiers = this.soldiers.filter((s) => s.alive);
   }
 
   public draw(ctx: CanvasRenderingContext2D, cameraY: number): void {
     const renderKingY = this.kingY - cameraY;
 
-    // 1. Draw Aura Circle
+    // 1. Draw Detection Aura Circle (Dashed green radar perimeter)
     ctx.save();
     ctx.beginPath();
     ctx.arc(this.kingX, renderKingY, this.auraRadius, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(74, 222, 128, 0.12)'; // Faint green fill
+    ctx.fillStyle = 'rgba(74, 222, 128, 0.08)';
     ctx.fill();
     ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(74, 222, 128, 0.45)'; // Bright green border
-    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = 'rgba(74, 222, 128, 0.45)';
+    ctx.setLineDash([6, 5]);
     ctx.stroke();
     ctx.restore();
 
@@ -293,7 +363,7 @@ export class Squad {
       ctx.beginPath();
       ctx.moveTo(this.kingX, renderKingY);
       ctx.lineTo(this.kingSlashTarget.x, targetRenderY);
-      ctx.strokeStyle = '#fbbf24'; // Vivid Gold slash
+      ctx.strokeStyle = '#fbbf24';
       ctx.lineWidth = 4;
       ctx.shadowColor = '#f59e0b';
       ctx.shadowBlur = 8;
@@ -305,13 +375,9 @@ export class Squad {
     this.drawCoinTower(ctx, renderKingY);
   }
 
-  /**
-   * Renders the swaying Sine-wave coin tower on top of the King
-   */
   private drawCoinTower(ctx: CanvasRenderingContext2D, renderKingY: number): void {
     if (this.stackedCoins <= 0) return;
 
-    // Scale stacked coins so it doesn't exceed 60 visual layers
     const layerScale = Math.max(1, Math.ceil(this.stackedCoins / 60));
     const totalLayers = Math.min(60, Math.ceil(this.stackedCoins / layerScale));
 
@@ -319,8 +385,6 @@ export class Squad {
     const startY = renderKingY - 18;
 
     for (let i = 0; i < totalLayers; i++) {
-      // Sine wave swaying formula from blueprint:
-      // Xi = Xking + sin(time * 0.008 - i * 0.15) * min(18, i * 0.4) - velocityX * i * 0.25
       const swayOffset =
         Math.sin(this.totalTime * 8 - i * 0.15) * Math.min(18, i * 0.4) -
         (this.velocityX / this.baseSpeed) * Math.min(22, i * 0.35);
@@ -328,11 +392,9 @@ export class Squad {
       const coinX = this.kingX + swayOffset;
       const coinY = startY - i * coinHeight;
 
-      // Draw mini coin slice
       ctx.drawImage(spriteCache.coin, coinX - 7, coinY - 3, 14, 6);
     }
 
-    // Gold Number Badge at the top of the tower
     const topSway =
       Math.sin(this.totalTime * 8 - totalLayers * 0.15) * Math.min(18, totalLayers * 0.4) -
       (this.velocityX / this.baseSpeed) * Math.min(22, totalLayers * 0.35);

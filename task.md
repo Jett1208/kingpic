@@ -124,3 +124,16 @@
 - [x] `tsc -b && vite build` passed cleanly with 0 errors
 - [x] `oxlint` passed with 0 warnings and 0 errors
 - [x] Standalone PWA service worker and Web App Manifest generated
+
+---
+
+## Phase 5: Squad Combat Evolution (ADR 0005 & 0006)
+
+### ✅ T-19: Dynamic Charge Combat, 50 HP Soldiers, Team Heal & Enemy Swarms
+- [x] Upgraded Soldier HP to 50 HP with mini health bar rendering
+- [x] Natural Loose Escort Mob following behavior (breaking free from rigid circle)
+- [x] Detection Aura perimeter triggering active charge combat into enemies
+- [x] Combat leash system (soldiers disengage and sprint back if King walks away)
+- [x] Enemy Swarm generation (20–24 Red Monsters placed across map corridors and camps)
+- [x] Cage Break Team Full Heal (rescued cage fully heals all surviving soldiers to 100% HP)
+
